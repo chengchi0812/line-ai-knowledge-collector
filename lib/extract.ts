@@ -1,5 +1,5 @@
 import net from "node:net";
-import type { ContentType, SourcePlatform } from "./types";
+import type { CaptureStatus, ContentType, SourcePlatform } from "./types";
 
 export function extractUrls(text: string): string[] {
   const matches = text.match(/https?:\/\/[^\s<>"')\]]+/gi) ?? [];
@@ -73,8 +73,11 @@ function decodeEntities(s: string): string {
     .replace(/&#39;/gi, "'");
 }
 
-export async function fetchWebSnapshot(url: string): Promise<{ title: string; excerpt: string; status: "成功" | "部分" }> {
-  if (!isSafePublicUrl(url)) return { title: "", excerpt: "網址未自動擷取（安全性限制）", status: "部分" };
+export async function fetchWebSnapshot(url: string): Promise<{ title: string; excerpt: string; status: CaptureStatus }> {
+  if (!isSafePublicUrl(url)) {
+    return { title: "", excerpt: "網址未自動擷取（安全性限制）；原始連結已保留", status: "未擷取" };
+  }
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
@@ -83,11 +86,15 @@ export async function fetchWebSnapshot(url: string): Promise<{ title: string; ex
       signal: ctrl.signal,
       headers: { "user-agent": "Mozilla/5.0 (compatible; PersonalKnowledgeBot/1.0)" },
     });
-    if (!res.ok) return { title: "", excerpt: `網頁回應 ${res.status}，保留網址待後續處理`, status: "部分" };
+    if (!res.ok) {
+      return { title: "", excerpt: `網頁回應 ${res.status}；原始連結已保留待後續補抓`, status: "失敗" };
+    }
+
     const ct = res.headers.get("content-type") || "";
     if (!ct.includes("text/html") && !ct.includes("text/plain")) {
-      return { title: "", excerpt: `內容類型 ${ct || "未知"}，未直接解析`, status: "部分" };
+      return { title: "", excerpt: `已取得連結，但內容類型 ${ct || "未知"} 目前未直接解析`, status: "部分" };
     }
+
     const html = (await res.text()).slice(0, 180_000);
     const title = decodeEntities((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "").replace(/\s+/g, " ").trim());
     const description = decodeEntities(
@@ -101,9 +108,13 @@ export async function fetchWebSnapshot(url: string): Promise<{ title: string; ex
       .replace(/\s+/g, " ")
       .trim());
     const excerpt = (description || plain).slice(0, 6500);
-    return { title, excerpt: excerpt || "僅取得網址，未取得可摘要文字", status: excerpt ? "成功" : "部分" };
+
+    if (!excerpt) {
+      return { title, excerpt: "僅取得網址或頁面殼層，未取得可摘要文字；原始連結已保留", status: "失敗" };
+    }
+    return { title, excerpt, status: "成功" };
   } catch {
-    return { title: "", excerpt: "網頁無法自動讀取；已保留網址", status: "部分" };
+    return { title: "", excerpt: "網頁目前無法自動讀取；原始連結已保留待後續補抓", status: "失敗" };
   } finally {
     clearTimeout(timer);
   }
