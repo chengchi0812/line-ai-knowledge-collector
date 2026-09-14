@@ -1,9 +1,21 @@
 import net from "node:net";
 import type { CaptureStatus, ContentType, SourcePlatform } from "./types";
 
+function trimUrl(raw: string): string {
+  return raw.replace(/[.,;!?，。；！]+$/, "");
+}
+
 export function extractUrls(text: string): string[] {
-  const matches = text.match(/https?:\/\/[^\s<>"')\]]+/gi) ?? [];
-  return [...new Set(matches.map((u) => u.replace(/[.,;!?]+$/, "")))];
+  const explicitRe = /https?:\/\/[^\s<>"')\]]+/gi;
+  const explicit = (text.match(explicitRe) ?? []).map(trimUrl);
+
+  // Old LINE exports sometimes contain a useful domain without http(s), e.g. "tool.vercel.app".
+  // Search only after removing explicit URLs so the hostname inside https://... is not captured twice.
+  const remainder = text.replace(explicitRe, " ");
+  const bareRe = /(?<![@\w])(?:[a-z0-9-]+\.)+(?:com|tw|org|net|app|ai|io|dev|gov|edu|me)(?:\/[^\s<>"')\]]*)?/gi;
+  const bare = (remainder.match(bareRe) ?? []).map((u) => `https://${trimUrl(u)}`);
+
+  return [...new Set([...explicit, ...bare])];
 }
 
 export function detectPlatform(url?: string): SourcePlatform {
