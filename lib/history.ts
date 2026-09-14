@@ -67,7 +67,7 @@ function parseMessages(text: string): HistoryMessage[] {
     if (parts.length >= 3) {
       let date = currentDate;
       let time = normalizeClock(parts[0]);
-      let senderIndex = 1;
+      const senderIndex = 1;
 
       const full = parts[0].trim().match(/^(\d{4}[\/.\-]\d{1,2}[\/.\-]\d{1,2})\s+(.+)$/);
       if (!time && full) {
@@ -83,7 +83,6 @@ function parseMessages(text: string): HistoryMessage[] {
       }
     }
 
-    // Some desktop exports use: YYYY/MM/DD HH:mm<TAB>Name<TAB>Text
     const fullLine = line.match(/^(\d{4}[\/.\-]\d{1,2}[\/.\-]\d{1,2})\s+([^\t]+)\t([^\t]+)\t([\s\S]+)$/);
     if (fullLine) {
       const date = normalizeDateLine(fullLine[1]);
@@ -92,7 +91,6 @@ function parseMessages(text: string): HistoryMessage[] {
       continue;
     }
 
-    // Multi-line message continuation.
     if (messages.length && line.trim() && !/^Time\s+Name\s+Text$/i.test(line.trim())) {
       messages[messages.length - 1].text += `\n${line.trim()}`;
     }
@@ -113,8 +111,31 @@ function near(a: HistoryMessage, b: HistoryMessage): boolean {
   return x !== undefined && y !== undefined && Math.abs(x - y) <= 10;
 }
 
+function redactSensitiveText(text: string): string {
+  const credentialWord = /(密碼|密码|password|passwd|\bpwd\b|api[_\s-]?key|access[_\s-]?token|auth(?:orization)?[_\s-]?token|client[_\s-]?secret|channel[_\s-]?secret|bearer\s+token|token\s*[:=]|secret\s*[:=])/i;
+  const accountHeading = /(管理員帳號|管理员账号|帳號|账号|login|username|user\s*name)/i;
+
+  return text.split("\n").map((line) => {
+    if (credentialWord.test(line)) {
+      const label = line.match(/^\s*([^:=：]{1,40})\s*[:=：]/)?.[1]?.trim();
+      return label ? `${label}：[已隱去敏感憑證]` : "[已隱去敏感憑證]";
+    }
+
+    // Common export pattern: email / password immediately below an account heading.
+    if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b\s*\/\s*\S+/i.test(line)) {
+      return line.replace(/(\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b)\s*\/\s*\S+/gi, "$1 / [已隱去密碼]");
+    }
+
+    // Preserve the fact that an account reference existed, but never infer or expose a credential value.
+    if (accountHeading.test(line) && /[:：]\s*\S+/.test(line)) {
+      return line.replace(/([:：])\s*\S+.*/, "$1 [已隱去帳號／憑證內容]");
+    }
+    return line;
+  }).join("\n");
+}
+
 function cleanNote(text: string, urls: string[]): string {
-  let out = text;
+  let out = redactSensitiveText(text);
   for (const url of urls) out = out.replaceAll(url, " ");
   return out.replace(/\s+/g, " ").trim();
 }
@@ -133,9 +154,22 @@ function toCollectedAt(msg: HistoryMessage): string | undefined {
   return `${msg.date}T${time}:00+08:00`;
 }
 
-function canonicalUrl(raw: string): string {
+function sanitizeUrl(raw: string): string {
   try {
     const u = new URL(raw);
+    const secretKeys = /(^|_)(token|secret|password|passwd|pwd|api[_-]?key|access[_-]?token|auth|authorization|key)($|_)/i;
+    for (const key of [...u.searchParams.keys()]) {
+      if (secretKeys.test(key)) u.searchParams.set(key, "REDACTED");
+    }
+    return u.toString();
+  } catch {
+    return raw.trim();
+  }
+}
+
+function canonicalUrl(raw: string): string {
+  try {
+    const u = new URL(sanitizeUrl(raw));
     u.hash = "";
     for (const key of [...u.searchParams.keys()]) {
       const k = key.toLowerCase();
@@ -167,17 +201,18 @@ export function parseLineHistoryBuffer(buffer: Buffer): { items: HistoricalKnowl
 
     const prev = messages[i - 1];
     if (prev && !extractUrls(prev.text).length && !isNoise(prev.text) && near(prev, msg)) {
-      noteParts.unshift(prev.text.trim());
+      noteParts.unshift(redactSensitiveText(prev.text.trim()));
       usedAsNote.add(i - 1);
     }
     const next = messages[i + 1];
     if (next && !extractUrls(next.text).length && !isNoise(next.text) && near(msg, next)) {
-      noteParts.push(next.text.trim());
+      noteParts.push(redactSensitiveText(next.text.trim()));
       usedAsNote.add(i + 1);
     }
 
     const note = [...new Set(noteParts)].join(" / ").slice(0, 1500);
-    for (const url of urls) {
+    for (const originalUrl of urls) {
+      const url = sanitizeUrl(originalUrl);
       const key = canonicalUrl(url);
       const existing = urlMap.get(key);
       if (existing) {
@@ -188,7 +223,7 @@ export function parseLineHistoryBuffer(buffer: Buffer): { items: HistoricalKnowl
         historyId: stableId("url", key),
         url,
         note,
-        rawText: msg.text,
+        rawText: redactSensitiveText(msg.text).replaceAll(originalUrl, url),
         sender: msg.sender,
         collectedAt: toCollectedAt(msg),
       });
@@ -197,12 +232,12 @@ export function parseLineHistoryBuffer(buffer: Buffer): { items: HistoricalKnowl
 
   const items = [...urlMap.values()];
 
-  // Preserve meaningful standalone notes that were not merely context for a URL.
+  // Preserve meaningful standalone notes, but redact passwords/tokens before they can leave the parser.
   for (let i = 0; i < messages.length; i++) {
     if (usedAsNote.has(i)) continue;
     const msg = messages[i];
     if (extractUrls(msg.text).length || isNoise(msg.text)) continue;
-    const clean = msg.text.replace(/\s+/g, " ").trim();
+    const clean = redactSensitiveText(msg.text).replace(/\s+/g, " ").trim();
     if (clean.length < 8) continue;
     const seed = `${msg.date || ""}|${msg.time || ""}|${msg.sender}|${clean}`;
     items.push({
