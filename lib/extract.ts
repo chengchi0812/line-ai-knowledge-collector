@@ -13,7 +13,14 @@ export function extractUrls(text: string): string[] {
   // Search only after removing explicit URLs so the hostname inside https://... is not captured twice.
   const remainder = text.replace(explicitRe, " ");
   const bareRe = /(?<![@\w])(?:[a-z0-9-]+\.)+(?:com|tw|org|net|app|ai|io|dev|gov|edu|me)(?:\/[^\s<>"')\]]*)?/gi;
-  const bare = (remainder.match(bareRe) ?? []).map((u) => `https://${trimUrl(u)}`);
+  const bare = [...remainder.matchAll(bareRe)]
+    .filter((match) => {
+      const start = match.index ?? 0;
+      const before = remainder.slice(Math.max(0, start - 120), start);
+      const tokenStart = Math.max(before.lastIndexOf(" "), before.lastIndexOf("\n"), before.lastIndexOf("\t"));
+      return !before.slice(tokenStart + 1).includes("@");
+    })
+    .map((match) => `https://${trimUrl(match[0])}`);
 
   return [...new Set([...explicit, ...bare])];
 }
