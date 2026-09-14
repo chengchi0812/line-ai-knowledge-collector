@@ -1,4 +1,4 @@
-import type { AIResult, ContentType, SourcePlatform } from "./types";
+import type { AIResult, CaptureStatus, ContentType, SourcePlatform } from "./types";
 
 const fallback: AIResult = {
   title: "待整理收藏",
@@ -12,6 +12,29 @@ const fallback: AIResult = {
   related: "",
 };
 
+function uncapturedFallback(input: {
+  sourcePlatform: SourcePlatform;
+  collectedAt?: string;
+  pageTitle?: string;
+  fileName?: string;
+  userText: string;
+}): AIResult {
+  const date = input.collectedAt?.slice(0, 10);
+  const source = input.sourcePlatform || "Web";
+  const titleHint = input.pageTitle || input.fileName;
+  return {
+    title: titleHint || `【待補內容】${source} 收藏${date ? `｜${date}` : ""}`,
+    summary: "目前無法從原始連結取得正文、字幕或可驗證內容；此筆為你主動轉傳收藏，已保留原始連結與收藏時間，等待後續補抓。",
+    why: "主動轉傳本身代表收藏意圖；不因平台登入限制、反爬、短網址失效或暫時無法擷取而刪除。",
+    category: "暫存待判斷",
+    tags: [],
+    applications: ["待判斷"],
+    status: "待看",
+    importance: 3,
+    related: "待後續補抓；若日後取得原始內容，應更新此筆既有紀錄，而不是另建一筆。",
+  };
+}
+
 function safeJson(text: string): unknown {
   const cleaned = text.replace(/```json|```/gi, "").trim();
   const m = cleaned.match(/\{[\s\S]*\}/);
@@ -22,7 +45,7 @@ function normalize(x: any, titleHint: string): AIResult {
   const categories = ["政策與政府計畫", "AI／科技工具", "產業案例與趨勢", "簡報與視覺素材", "工作方法／Prompt／範本", "個人生活與興趣", "暫存待判斷"];
   const tags = ["AI", "政策", "工具", "產業", "簡報", "研究", "生活"];
   const apps = ["工作", "政策研究", "簡報", "學習", "生活", "娛樂", "待判斷"];
-  const statuses = ["待看", "深入研究", "可應用", "建議刪除"];
+  const statuses = ["待看", "深入研究", "可應用"];
   const importance = Math.max(1, Math.min(5, Number(x.importance) || 2)) as 1|2|3|4|5;
   return {
     title: String(x.title || titleHint || fallback.title).slice(0, 120),
@@ -45,7 +68,13 @@ export async function analyzeWithAI(input: {
   sourcePlatform: SourcePlatform;
   contentType: ContentType;
   fileName?: string;
+  captureStatus?: CaptureStatus;
+  collectedAt?: string;
 }): Promise<{ result: AIResult; usedAI: boolean }> {
+  if (input.url && input.captureStatus === "失敗") {
+    return { result: uncapturedFallback(input), usedAI: false };
+  }
+
   const base = process.env.AI_BASE_URL?.replace(/\/$/, "");
   const key = process.env.AI_API_KEY;
   const model = process.env.AI_MODEL;
@@ -54,10 +83,11 @@ export async function analyzeWithAI(input: {
 
   const system = `你是個人知識庫整理助理。使用繁體中文（台灣用語），只輸出 JSON。\n
 使用者會把 LINE 裡收藏的網址、文字、圖片或檔案存入知識庫。你要幫忙降噪，不要只是重述。\n
+重要原則：凡是使用者主動轉傳到這個收藏群組的內容，都視為具有收藏意圖。不得因內容價值暫時無法判斷、資訊不完整或看似不重要而建議刪除；不確定時請標記為「待看」或「暫存待判斷」。\n
 固定主分類只能擇一：政策與政府計畫、AI／科技工具、產業案例與趨勢、簡報與視覺素材、工作方法／Prompt／範本、個人生活與興趣、暫存待判斷。\n
 標籤只能從：AI、政策、工具、產業、簡報、研究、生活。\n
 應用情境只能從：工作、政策研究、簡報、學習、生活、娛樂、待判斷。\n
-status 只能是：待看、深入研究、可應用、建議刪除。\n
+status 只能是：待看、深入研究、可應用。\n
 importance 為 1-5。\n
 請輸出：{"title":"","summary":"","why":"","category":"","tags":[],"applications":[],"status":"","importance":3,"related":""}`;
 
