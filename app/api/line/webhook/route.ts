@@ -1,8 +1,8 @@
-import { analyzeWithAI } from "@/lib/ai";
-import { detectContentTypeFromMessage, detectPlatform, extractUrls, fetchWebSnapshot } from "@/lib/extract";
-import { downloadLineContent, replyLine, verifyLineSignature } from "@/lib/line";
-import { createKnowledgePage, uploadFileToNotion } from "@/lib/notion";
-import type { CaptureStatus } from "@/lib/types";
+import { analyzeWithAI } from "../../../../lib/ai";
+import { detectContentTypeFromMessage, detectPlatform, extractUrls, fetchWebSnapshot } from "../../../../lib/extract";
+import { downloadLineContent, replyLine, verifyLineSignature } from "../../../../lib/line";
+import { createKnowledgePage, uploadFileToNotion } from "../../../../lib/notion";
+import type { CaptureStatus } from "../../../../lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
