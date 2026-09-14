@@ -75,7 +75,8 @@ export async function findExistingHistoryIds(ids: string[]): Promise<Set<string>
 }
 
 export async function createKnowledgePage(item: StoredItem): Promise<{ id: string; url: string }> {
-  const aiProcessed = item.captureStatus !== "失敗" && (
+  const needsContentRecovery = item.captureStatus === "失敗" || item.captureStatus === "未擷取";
+  const aiProcessed = !needsContentRecovery && (
     item.ai.category !== "暫存待判斷" || item.ai.summary !== "已先保存到知識庫，等待 AI 進一步整理。"
   );
 
