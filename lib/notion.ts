@@ -13,6 +13,10 @@ function authHeaders(json = true): HeadersInit {
   };
 }
 
+function dataSourceId(): string {
+  return process.env.NOTION_DATA_SOURCE_ID || DEFAULT_NOTION_DATA_SOURCE_ID;
+}
+
 function richText(content: string) {
   return { rich_text: [{ type: "text", text: { content: content.slice(0, 1900) } }] };
 }
@@ -37,8 +41,40 @@ export async function uploadFileToNotion(fileName: string, contentType: string, 
   return upload.id;
 }
 
+export async function findExistingHistoryIds(ids: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  for (let i = 0; i < ids.length; i += 20) {
+    const chunk = ids.slice(i, i + 20);
+    if (!chunk.length) continue;
+    try {
+      const res = await fetch(`https://api.notion.com/v1/data_sources/${dataSourceId()}/query`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          page_size: 100,
+          filter: {
+            or: chunk.map((id) => ({ property: "LINE訊息ID", rich_text: { equals: id } })),
+          },
+        }),
+      });
+      if (!res.ok) {
+        console.error("Notion history dedupe query failed", res.status, (await res.text()).slice(0, 500));
+        continue;
+      }
+      const data = await res.json();
+      for (const page of data.results || []) {
+        const rt = page?.properties?.["LINE訊息ID"]?.rich_text;
+        const value = Array.isArray(rt) ? rt.map((x: any) => x?.plain_text || "").join("") : "";
+        if (value) found.add(value);
+      }
+    } catch (err) {
+      console.error("Notion history dedupe query error", err);
+    }
+  }
+  return found;
+}
+
 export async function createKnowledgePage(item: StoredItem): Promise<{ id: string; url: string }> {
-  const dataSourceId = process.env.NOTION_DATA_SOURCE_ID || DEFAULT_NOTION_DATA_SOURCE_ID;
   const props: Record<string, unknown> = {
     "標題": { title: [{ type: "text", text: { content: item.title.slice(0, 120) } }] },
     "來源平台": { select: { name: item.sourcePlatform } },
@@ -50,7 +86,7 @@ export async function createKnowledgePage(item: StoredItem): Promise<{ id: strin
     "應用情境": { multi_select: item.ai.applications.map((name) => ({ name })) },
     "狀態": { select: { name: item.ai.status } },
     "重要度": { number: item.ai.importance },
-    "收藏日期": { date: { start: new Date().toISOString() } },
+    "收藏日期": { date: { start: item.collectedAt || new Date().toISOString() } },
     "原始備註": richText(item.originalNote),
     "內容快照": richText(item.snapshot),
     "可能關聯": richText(item.ai.related),
@@ -67,7 +103,7 @@ export async function createKnowledgePage(item: StoredItem): Promise<{ id: strin
   const res = await fetch("https://api.notion.com/v1/pages", {
     method: "POST",
     headers: authHeaders(),
-    body: JSON.stringify({ parent: { type: "data_source_id", data_source_id: dataSourceId }, properties: props }),
+    body: JSON.stringify({ parent: { type: "data_source_id", data_source_id: dataSourceId() }, properties: props }),
   });
   if (!res.ok) throw new Error(`Notion create page failed: ${res.status} ${(await res.text()).slice(0, 1000)}`);
   const page = await res.json();
