@@ -25,7 +25,8 @@ export async function uploadFileToNotion(fileName: string, contentType: string, 
   if (!create.ok) throw new Error(`Notion create file upload failed: ${create.status} ${(await create.text()).slice(0, 500)}`);
   const upload = await create.json();
   const form = new FormData();
-  form.append("file", new Blob([buffer], { type: contentType }), fileName);
+  const bytes = Uint8Array.from(buffer);
+  form.append("file", new Blob([bytes], { type: contentType }), fileName);
   const sent = await fetch(upload.upload_url || `https://api.notion.com/v1/file_uploads/${upload.id}/send`, {
     method: "POST",
     headers: authHeaders(false),
