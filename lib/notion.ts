@@ -75,6 +75,10 @@ export async function findExistingHistoryIds(ids: string[]): Promise<Set<string>
 }
 
 export async function createKnowledgePage(item: StoredItem): Promise<{ id: string; url: string }> {
+  const aiProcessed = item.captureStatus !== "失敗" && (
+    item.ai.category !== "暫存待判斷" || item.ai.summary !== "已先保存到知識庫，等待 AI 進一步整理。"
+  );
+
   const props: Record<string, unknown> = {
     "標題": { title: [{ type: "text", text: { content: item.title.slice(0, 120) } }] },
     "來源平台": { select: { name: item.sourcePlatform } },
@@ -91,7 +95,7 @@ export async function createKnowledgePage(item: StoredItem): Promise<{ id: strin
     "內容快照": richText(item.snapshot),
     "可能關聯": richText(item.ai.related),
     "是否重複": { checkbox: false },
-    "AI處理完成": { checkbox: item.ai.category !== "暫存待判斷" || item.ai.summary !== "已先保存到知識庫，等待 AI 進一步整理。" },
+    "AI處理完成": { checkbox: aiProcessed },
     "LINE訊息ID": richText(item.messageId),
     "擷取狀態": { select: { name: item.captureStatus } },
   };
