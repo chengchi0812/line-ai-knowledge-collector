@@ -25,7 +25,7 @@ function uncapturedFallback(input: {
   return {
     title: titleHint || `【待補內容】${source} 收藏${date ? `｜${date}` : ""}`,
     summary: "目前無法從原始連結取得正文、字幕或可驗證內容；此筆為你主動轉傳收藏，已保留原始連結與收藏時間，等待後續補抓。",
-    why: "主動轉傳本身代表收藏意圖；不因平台登入限制、反爬、短網址失效或暫時無法擷取而刪除。",
+    why: "主動轉傳本身代表收藏意圖；不因平台登入限制、反爬、短網址失效、安全性限制或暫時無法擷取而刪除。",
     category: "暫存待判斷",
     tags: [],
     applications: ["待判斷"],
@@ -71,7 +71,7 @@ export async function analyzeWithAI(input: {
   captureStatus?: CaptureStatus;
   collectedAt?: string;
 }): Promise<{ result: AIResult; usedAI: boolean }> {
-  if (input.url && input.captureStatus === "失敗") {
+  if (input.url && (input.captureStatus === "失敗" || input.captureStatus === "未擷取")) {
     return { result: uncapturedFallback(input), usedAI: false };
   }
 
