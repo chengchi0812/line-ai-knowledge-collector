@@ -40,7 +40,7 @@ async function processEvent(event: LineEvent, origin: string) {
 
   if (msg.type === "file" && msg.fileName?.toLowerCase().endsWith(".txt")) {
     if (!event.source.groupId) return;
-    await replyLine(event.replyToken, `已收到 LINE 歷史聊天紀錄：${msg.fileName}\n系統會自動分批處理整份資料，你只需要上傳這一次。完成後會在本群組回報總結果。`);
+    await replyLine(event.replyToken, `已收到 LINE 歷史聊天紀錄：${msg.fileName}\n系統會自動分批處理整份資料，你只需要上傳這一次。完成後會在本群組回報總結果。\n原始內容暫時抓不到的連結也會保留，不會直接刪除。`);
     await triggerHistoryJob(origin, {
       messageId: msg.id,
       fileName: msg.fileName,
@@ -64,6 +64,13 @@ async function processEvent(event: LineEvent, origin: string) {
     pageTitle = web.title;
     snapshot = [userText, web.excerpt].filter(Boolean).join("\n\n").slice(0, 7600);
     captureStatus = web.status;
+    if (captureStatus === "失敗") {
+      snapshot = [
+        "【待補內容】目前無法取得原始連結正文／字幕，但已保留此筆收藏。",
+        `原始連結：${originalUrl}`,
+        userText && userText !== originalUrl ? `當時備註：${userText}` : "",
+      ].filter(Boolean).join("\n");
+    }
   }
 
   if (["file", "image", "video", "audio"].includes(msg.type)) {
@@ -90,7 +97,17 @@ async function processEvent(event: LineEvent, origin: string) {
     }
   }
 
-  const ai = await analyzeWithAI({ userText, url: originalUrl, pageTitle, snapshot, sourcePlatform, contentType, fileName });
+  const ai = await analyzeWithAI({
+    userText,
+    url: originalUrl,
+    pageTitle,
+    snapshot,
+    sourcePlatform,
+    contentType,
+    fileName,
+    captureStatus,
+    collectedAt: new Date().toISOString(),
+  });
   const stored = await createKnowledgePage({
     title: ai.result.title || pageTitle || fileName || "LINE 收藏",
     sourcePlatform,
@@ -104,7 +121,10 @@ async function processEvent(event: LineEvent, origin: string) {
     notionFileUploadId,
   });
 
-  await replyLine(event.replyToken, `已收進知識庫 ✅\n${ai.result.title}\n分類：${ai.result.category}｜重要度：${ai.result.importance}/5${ai.usedAI ? "" : "\n（AI 尚未設定，目前先保存待整理）"}`);
+  const note = captureStatus === "失敗"
+    ? "\n（原始內容暫時無法擷取，連結已保留為待補內容）"
+    : ai.usedAI ? "" : "\n（AI 尚未完成整理，目前先保存待整理）";
+  await replyLine(event.replyToken, `已收進知識庫 ✅\n${ai.result.title}\n分類：${ai.result.category}｜重要度：${ai.result.importance}/5${note}`);
   return stored;
 }
 
