@@ -50,12 +50,29 @@ async function importOne(item: HistoricalKnowledgeItem, fileName: string) {
         pageTitle = web.title;
         snapshot = [item.note || item.rawText, web.excerpt].filter(Boolean).join("\n\n").slice(0, 7600);
         captureStatus = web.status;
+        if (captureStatus === "失敗") {
+          snapshot = [
+            `【待補內容】目前無法取得原始連結正文／字幕，但保留此筆收藏。`,
+            `原始連結：${item.url}`,
+            item.note ? `當時備註：${item.note}` : "",
+            `收藏時間：${item.collectedAt}`,
+          ].filter(Boolean).join("\n");
+        }
       }
 
       const sourcePlatform = item.url ? detectPlatform(item.url) : "LINE";
       const contentType = item.url ? detectContentTypeFromMessage("text", undefined, item.url) : "貼文";
       const userText = item.note || item.rawText;
-      const ai = await analyzeWithAI({ userText, url: item.url, pageTitle, snapshot, sourcePlatform, contentType });
+      const ai = await analyzeWithAI({
+        userText,
+        url: item.url,
+        pageTitle,
+        snapshot,
+        sourcePlatform,
+        contentType,
+        captureStatus,
+        collectedAt: item.collectedAt,
+      });
 
       await createKnowledgePage({
         title: ai.result.title || pageTitle || userText.slice(0, 80) || "LINE 歷史收藏",
@@ -117,6 +134,7 @@ export async function processHistoryJob(origin: string, payload: HistoryJobPaylo
       `新增：${payload.created} 筆`,
       `已存在略過：${payload.skipped} 筆`,
       `失敗：${payload.failed} 筆`,
+      "註：原始內容暫時抓不到的連結也會保留，並標記為待補內容。",
     ].join("\n"));
     return;
   }
@@ -149,6 +167,7 @@ export async function processHistoryJob(origin: string, payload: HistoryJobPaylo
     `新增：${next.created} 筆`,
     `已存在略過：${next.skipped} 筆`,
     `失敗：${next.failed} 筆`,
-    next.failed ? "若有失敗項目，稍後重新上傳同一份檔案即可；系統會略過已完成資料。" : "整份聊天紀錄已處理完成。",
+    "原始內容暫時抓不到的連結也已保留，並標記為待補內容。",
+    next.failed ? "若有真正寫入失敗的項目，稍後重新上傳同一份檔案即可；系統會略過已完成資料。" : "整份聊天紀錄已處理完成。",
   ].join("\n"));
 }
