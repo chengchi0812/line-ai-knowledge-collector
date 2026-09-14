@@ -1,6 +1,7 @@
 import type { StoredItem } from "./types";
 
 const NOTION_VERSION = "2026-03-11";
+const DEFAULT_NOTION_DATA_SOURCE_ID = "344dad85-d683-494d-9eac-d4624159a0de";
 
 function authHeaders(json = true): HeadersInit {
   const key = process.env.NOTION_API_KEY;
@@ -37,8 +38,7 @@ export async function uploadFileToNotion(fileName: string, contentType: string, 
 }
 
 export async function createKnowledgePage(item: StoredItem): Promise<{ id: string; url: string }> {
-  const dataSourceId = process.env.NOTION_DATA_SOURCE_ID;
-  if (!dataSourceId) throw new Error("NOTION_DATA_SOURCE_ID is missing");
+  const dataSourceId = process.env.NOTION_DATA_SOURCE_ID || DEFAULT_NOTION_DATA_SOURCE_ID;
   const props: Record<string, unknown> = {
     "標題": { title: [{ type: "text", text: { content: item.title.slice(0, 120) } }] },
     "來源平台": { select: { name: item.sourcePlatform } },
