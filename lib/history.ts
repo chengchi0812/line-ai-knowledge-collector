@@ -114,22 +114,38 @@ function near(a: HistoryMessage, b: HistoryMessage): boolean {
 function redactSensitiveText(text: string): string {
   const credentialWord = /(密碼|密码|password|passwd|\bpwd\b|api[_\s-]?key|access[_\s-]?token|auth(?:orization)?[_\s-]?token|client[_\s-]?secret|channel[_\s-]?secret|bearer\s+token|token\s*[:=]|secret\s*[:=])/i;
   const accountHeading = /(管理員帳號|管理员账号|帳號|账号|login|username|user\s*name)/i;
+  const financialContext = /(轉帳|转账|匯款|汇款|銀行|银行|帳戶|账户|信用卡|卡號|卡号|account\s*(?:number|no\.?))/i;
+  const identityContext = /(身分證|身份證|身份证|passport|護照)/i;
+  const highEntropy = /(?:\b\d{6,}:[A-Za-z0-9_-]{20,}\b|\b[A-Fa-f0-9]{32,}\b|\b[A-Za-z0-9_-]{40,}\b)/g;
 
-  return text.split("\n").map((line) => {
+  return text.split("\n").map((originalLine) => {
+    let line = originalLine;
+
     if (credentialWord.test(line)) {
       const label = line.match(/^\s*([^:=：]{1,40})\s*[:=：]/)?.[1]?.trim();
       return label ? `${label}：[已隱去敏感憑證]` : "[已隱去敏感憑證]";
     }
 
-    // Common export pattern: email / password immediately below an account heading.
     if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b\s*\/\s*\S+/i.test(line)) {
-      return line.replace(/(\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b)\s*\/\s*\S+/gi, "$1 / [已隱去密碼]");
+      line = line.replace(/(\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b)\s*\/\s*\S+/gi, "$1 / [已隱去密碼]");
     }
 
-    // Preserve the fact that an account reference existed, but never infer or expose a credential value.
     if (accountHeading.test(line) && /[:：]\s*\S+/.test(line)) {
-      return line.replace(/([:：])\s*\S+.*/, "$1 [已隱去帳號／憑證內容]");
+      line = line.replace(/([:：])\s*\S+.*/, "$1 [已隱去帳號／憑證內容]");
     }
+
+    if (financialContext.test(line)) {
+      line = line
+        .replace(/(帳號末\s*\d*\s*碼(?:為|是|[:：])?\s*)\d+/gi, "$1[已隱去]")
+        .replace(/(轉帳|转账|匯款|汇款)([^\n]{0,20}?)(\d[\d,]*(?:\.\d+)?)\s*(元|TWD|NTD)/gi, "$1$2[已隱去金額]$4")
+        .replace(/\b\d{12,19}\b/g, "[已隱去金融帳號]");
+    }
+
+    if (identityContext.test(line)) {
+      line = line.replace(/\b[A-Z][12]\d{8}\b/gi, "[已隱去身分識別碼]");
+    }
+
+    line = line.replace(highEntropy, "[已隱去可能的敏感憑證]");
     return line;
   }).join("\n");
 }
@@ -232,7 +248,7 @@ export function parseLineHistoryBuffer(buffer: Buffer): { items: HistoricalKnowl
 
   const items = [...urlMap.values()];
 
-  // Preserve meaningful standalone notes, but redact passwords/tokens before they can leave the parser.
+  // Preserve meaningful standalone notes, but redact credentials and sensitive identifiers first.
   for (let i = 0; i < messages.length; i++) {
     if (usedAsNote.has(i)) continue;
     const msg = messages[i];
