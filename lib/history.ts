@@ -98,6 +98,16 @@ function parseMessages(text: string): HistoryMessage[] {
   return messages;
 }
 
+function isAutomatedMessage(msg: HistoryMessage): boolean {
+  const sender = msg.sender.toLowerCase();
+  const text = msg.text.trim().replace(/^["“”']+/, "");
+
+  // These are mirrored/automatic records, not an intentional bookmark action by the user.
+  if (sender.includes("translator") || sender.includes("翻譯機器人") || sender.includes("翻译机器人")) return true;
+  if (/^【\s*IFTTT\s*】/i.test(text)) return true;
+  return false;
+}
+
 function minuteOfDay(time?: string): number | undefined {
   if (!time) return undefined;
   const [h, m] = time.split(":").map(Number);
@@ -201,8 +211,10 @@ function stableId(kind: string, value: string): string {
   return `history:${kind}:${crypto.createHash("sha1").update(value).digest("hex").slice(0, 20)}`;
 }
 
-export function parseLineHistoryBuffer(buffer: Buffer): { items: HistoricalKnowledgeItem[]; messageCount: number } {
-  const messages = parseMessages(decodeHistory(buffer));
+export function parseLineHistoryBuffer(buffer: Buffer): { items: HistoricalKnowledgeItem[]; messageCount: number; ignoredAutomationCount: number } {
+  const allMessages = parseMessages(decodeHistory(buffer));
+  const messages = allMessages.filter((msg) => !isAutomatedMessage(msg));
+  const ignoredAutomationCount = allMessages.length - messages.length;
   const usedAsNote = new Set<number>();
   const urlMap = new Map<string, HistoricalKnowledgeItem>();
 
@@ -266,5 +278,5 @@ export function parseLineHistoryBuffer(buffer: Buffer): { items: HistoricalKnowl
   }
 
   items.sort((a, b) => (a.collectedAt || "").localeCompare(b.collectedAt || ""));
-  return { items, messageCount: messages.length };
+  return { items, messageCount: allMessages.length, ignoredAutomationCount };
 }
