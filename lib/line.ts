@@ -31,3 +31,15 @@ export async function replyLine(replyToken: string | undefined, text: string): P
   });
   if (!res.ok) console.error("LINE reply failed", res.status, await res.text());
 }
+
+export async function pushLine(to: string | undefined, text: string): Promise<void> {
+  if (!to) return;
+  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  if (!token) return;
+  const res = await fetch("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ to, messages: [{ type: "text", text: text.slice(0, 4800) }] }),
+  });
+  if (!res.ok) console.error("LINE push failed", res.status, await res.text());
+}
