@@ -1,14 +1,13 @@
+import { waitUntil } from "@vercel/functions";
 import { analyzeWithAI } from "../../../../lib/ai";
 import { detectContentTypeFromMessage, detectPlatform, extractUrls, fetchWebSnapshot } from "../../../../lib/extract";
 import { parseLineHistoryBuffer, type HistoricalKnowledgeItem } from "../../../../lib/history";
-import { downloadLineContent, replyLine, verifyLineSignature } from "../../../../lib/line";
+import { downloadLineContent, pushLine, replyLine, verifyLineSignature } from "../../../../lib/line";
 import { createKnowledgePage, findExistingHistoryIds, uploadFileToNotion } from "../../../../lib/notion";
 import type { CaptureStatus } from "../../../../lib/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
-
-const HISTORY_IMPORT_LIMIT = 30;
+export const maxDuration = 1800;
 
 type LineEvent = {
   type: string;
@@ -40,47 +39,13 @@ async function mapLimit<T, R>(items: T[], concurrency: number, fn: (item: T, ind
   return results;
 }
 
-async function chooseHistoryBatch(items: HistoricalKnowledgeItem[]) {
-  const selected: HistoricalKnowledgeItem[] = [];
-  let scanned = 0;
-  let existingCount = 0;
-
-  for (let i = 0; i < items.length && selected.length < HISTORY_IMPORT_LIMIT; i += 20) {
-    const chunk = items.slice(i, i + 20);
-    const existing = await findExistingHistoryIds(chunk.map((item) => item.historyId));
-    scanned += chunk.length;
-    existingCount += existing.size;
-    for (const item of chunk) {
-      if (!existing.has(item.historyId) && selected.length < HISTORY_IMPORT_LIMIT) selected.push(item);
-    }
-  }
-
-  return { selected, scanned, existingCount };
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function importLineHistory(event: LineEvent, fileName: string) {
-  if (!event.message) return;
-  const max = Number(process.env.MAX_FILE_BYTES || 20 * 1024 * 1024);
-  const dl = await downloadLineContent(event.message.id);
-  if (dl.buffer.byteLength > max) {
-    await replyLine(event.replyToken, `歷史匯入失敗：檔案超過 ${Math.round(max / 1024 / 1024)} MB 上限。`);
-    return;
-  }
-
-  const parsed = parseLineHistoryBuffer(dl.buffer);
-  if (!parsed.items.length) {
-    await replyLine(event.replyToken, `歷史匯入：已讀取 ${parsed.messageCount} 則訊息，但沒有找到可整理的網址或文字筆記。請確認這是 LINE 匯出的 .txt 聊天紀錄。`);
-    return;
-  }
-
-  const batch = await chooseHistoryBatch(parsed.items);
-  if (!batch.selected.length) {
-    const unscanned = Math.max(0, parsed.items.length - batch.scanned);
-    await replyLine(event.replyToken, `歷史匯入檢查完成 ✅\n已掃描 ${batch.scanned} 筆，這些資料都已存在知識庫。${unscanned ? `\n尚有 ${unscanned} 筆未掃描，請再上傳同一份檔案以繼續。` : "\n這份檔案已全部處理完成。"}`);
-    return;
-  }
-
-  const results = await mapLimit(batch.selected, 6, async (item) => {
+async function importHistoricalItem(item: HistoricalKnowledgeItem, fileName: string) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       let pageTitle = "";
       let snapshot = item.rawText;
@@ -119,34 +84,64 @@ async function importLineHistory(event: LineEvent, fileName: string) {
       });
       return { ok: true as const };
     } catch (err) {
-      console.error("Historical item import failed", item.historyId, err);
-      return { ok: false as const };
+      lastError = err;
+      console.error("Historical item import attempt failed", item.historyId, attempt, err);
+      if (attempt < 3) await sleep(attempt * 1500);
     }
-  });
-
-  const created = results.filter((r) => r.ok).length;
-  const failed = results.length - created;
-  const unscanned = Math.max(0, parsed.items.length - batch.scanned);
-  const lines = [
-    "LINE 歷史整理完成 ✅",
-    `檔案：${fileName}`,
-    `解析訊息：${parsed.messageCount} 則`,
-    `知識候選：${parsed.items.length} 筆`,
-    `本次新增：${created} 筆`,
-    `已存在略過：${batch.existingCount} 筆`,
-    `失敗：${failed} 筆`,
-  ];
-  if (unscanned > 0 || batch.selected.length >= HISTORY_IMPORT_LIMIT) {
-    lines.push("尚有資料待處理：請再次上傳同一份 .txt，系統會略過已匯入資料並接著處理下一批。 ");
-  } else {
-    lines.push("這份聊天紀錄已掃描完成。");
   }
-  await replyLine(event.replyToken, lines.join("\n"));
+  console.error("Historical item import permanently failed", item.historyId, lastError);
+  return { ok: false as const };
+}
+
+async function importLineHistory(event: LineEvent, fileName: string) {
+  const groupId = event.source?.groupId;
+  try {
+    if (!event.message) return;
+    const max = Number(process.env.MAX_FILE_BYTES || 20 * 1024 * 1024);
+    const dl = await downloadLineContent(event.message.id);
+    if (dl.buffer.byteLength > max) {
+      await pushLine(groupId, `LINE 歷史匯入失敗：檔案超過 ${Math.round(max / 1024 / 1024)} MB 上限。`);
+      return;
+    }
+
+    const parsed = parseLineHistoryBuffer(dl.buffer);
+    if (!parsed.items.length) {
+      await pushLine(groupId, `LINE 歷史匯入：已讀取 ${parsed.messageCount} 則訊息，但沒有找到可整理的網址或文字筆記。請確認這是 LINE 匯出的 .txt 聊天紀錄。`);
+      return;
+    }
+
+    const existing = await findExistingHistoryIds(parsed.items.map((item) => item.historyId));
+    const pending = parsed.items.filter((item) => !existing.has(item.historyId));
+
+    if (!pending.length) {
+      await pushLine(groupId, `LINE 歷史匯入檢查完成 ✅\n解析訊息：${parsed.messageCount} 則\n知識候選：${parsed.items.length} 筆\n這份檔案的資料已全部存在知識庫，不需重複匯入。`);
+      return;
+    }
+
+    const results = await mapLimit(pending, 3, (item) => importHistoricalItem(item, fileName));
+    const created = results.filter((r) => r.ok).length;
+    const failed = results.length - created;
+
+    const lines = [
+      "LINE 歷史整理全部完成 ✅",
+      `檔案：${fileName}`,
+      `解析訊息：${parsed.messageCount} 則`,
+      `知識候選：${parsed.items.length} 筆`,
+      `原已存在：${existing.size} 筆`,
+      `本次新增：${created} 筆`,
+      `失敗：${failed} 筆`,
+    ];
+    if (failed > 0) lines.push("少數失敗資料可稍後重新上傳同一份檔案，系統會自動略過已完成項目，只補處理失敗部分。");
+    await pushLine(groupId, lines.join("\n"));
+  } catch (err) {
+    console.error("LINE history background import failed", err);
+    await pushLine(groupId, "LINE 歷史匯入中途發生錯誤。已完成的資料會保留；稍後可重新上傳同一份檔案，系統會自動略過已完成項目並接續處理。 ");
+  }
 }
 
 async function processEvent(event: LineEvent) {
   if (event.type !== "message" || !event.message) return;
-  if (event.source?.type !== "group") return; // 個人知識庫版本只收群組，避免陌生人私訊寫入
+  if (event.source?.type !== "group") return;
 
   const allowedGroup = process.env.LINE_ALLOWED_GROUP_ID;
   if (allowedGroup && event.source.groupId !== allowedGroup) return;
@@ -159,7 +154,8 @@ async function processEvent(event: LineEvent) {
   const contentType = detectContentTypeFromMessage(msg.type, msg.fileName, originalUrl);
 
   if (msg.type === "file" && msg.fileName?.toLowerCase().endsWith(".txt")) {
-    await importLineHistory(event, msg.fileName);
+    await replyLine(event.replyToken, `已收到 LINE 歷史聊天紀錄：${msg.fileName}\n開始在背景整理整份資料，完成後我會在這個群組回報結果。期間不用重複上傳。`);
+    waitUntil(importLineHistory(event, msg.fileName));
     return;
   }
 
@@ -228,7 +224,6 @@ export async function POST(req: Request) {
   let body: { events?: LineEvent[] };
   try { body = JSON.parse(raw); } catch { return new Response("Bad JSON", { status: 400 }); }
 
-  // LINE Verify 可能送 events: []；正常回 200。
   const events = body.events || [];
   const results = await Promise.allSettled(events.map(processEvent));
   for (const r of results) if (r.status === "rejected") console.error("Webhook event failed", r.reason);
