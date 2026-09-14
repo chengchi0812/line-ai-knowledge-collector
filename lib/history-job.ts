@@ -120,7 +120,10 @@ export async function processHistoryJob(origin: string, payload: HistoryJobPaylo
 
   const parsed = parseLineHistoryBuffer(dl.buffer);
   if (!parsed.items.length) {
-    await pushLine(payload.groupId, `LINE 歷史匯入：已讀取 ${parsed.messageCount} 則訊息，但沒有找到可整理的網址或文字筆記。`);
+    await pushLine(payload.groupId, [
+      `LINE 歷史匯入：已讀取 ${parsed.messageCount} 則訊息，但沒有找到可整理的網址或文字筆記。`,
+      parsed.ignoredAutomationCount ? `自動通知／翻譯鏡像略過：${parsed.ignoredAutomationCount} 則` : "",
+    ].filter(Boolean).join("\n"));
     return;
   }
 
@@ -130,6 +133,7 @@ export async function processHistoryJob(origin: string, payload: HistoryJobPaylo
       "LINE 歷史整理全部完成 ✅",
       `檔案：${payload.fileName}`,
       `解析訊息：${parsed.messageCount} 則`,
+      `自動通知／翻譯鏡像略過：${parsed.ignoredAutomationCount} 則`,
       `知識候選：${parsed.items.length} 筆`,
       `新增：${payload.created} 筆`,
       `已存在略過：${payload.skipped} 筆`,
@@ -163,6 +167,7 @@ export async function processHistoryJob(origin: string, payload: HistoryJobPaylo
     "LINE 歷史整理全部完成 ✅",
     `檔案：${payload.fileName}`,
     `解析訊息：${parsed.messageCount} 則`,
+    `自動通知／翻譯鏡像略過：${parsed.ignoredAutomationCount} 則`,
     `知識候選：${parsed.items.length} 筆`,
     `新增：${next.created} 筆`,
     `已存在略過：${next.skipped} 筆`,
