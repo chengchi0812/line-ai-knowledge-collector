@@ -21,7 +21,7 @@ export async function downloadLineContent(messageId: string): Promise<{ buffer: 
 }
 
 export async function replyLine(replyToken: string | undefined, text: string): Promise<void> {
-  if (process.env.LINE_REPLY_ENABLED !== "true" || !replyToken) return;
+  if (process.env.LINE_REPLY_ENABLED === "false" || !replyToken) return;
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token) return;
   const res = await fetch("https://api.line.me/v2/bot/message/reply", {
