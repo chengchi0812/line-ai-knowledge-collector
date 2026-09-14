@@ -36,4 +36,5 @@ export type StoredItem = {
   captureStatus: CaptureStatus;
   ai: AIResult;
   notionFileUploadId?: string;
+  collectedAt?: string;
 };
