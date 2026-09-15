@@ -28,6 +28,8 @@ LINE 群組 → Webhook → 網址/附件擷取 → AI 分類摘要 → Notion�
 - `AI_API_KEY`
 - `AI_MODEL`
 - `LINE_ALLOWED_GROUP_ID`（選填，第一次測試後建議補上）
+- `VIDEO_MAX_RETRIES`（選填，影片下載／轉錄失敗最多重試次數，預設 3）
+- `VIDEO_RETRY_COOLDOWN_HOURS`（選填，影片重試冷卻時數，預設 6）
 
 ### WiRouter（OpenAI-compatible）範例
 
