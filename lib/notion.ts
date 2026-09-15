@@ -136,6 +136,8 @@ export async function createKnowledgePage(item: StoredItem): Promise<{ id: strin
     "擷取狀態": { select: { name: item.captureStatus } },
   };
 
+  if (item.originalTitle) props["原始標題"] = richText(item.originalTitle);
+
   if (videoNeedsTranscription) {
     props["逐字稿狀態"] = { select: { name: "待處理" } };
   }
