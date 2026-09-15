@@ -15,22 +15,51 @@ def query_one(body):
 
 
 def active_video_job():
+    """
+    Notion 的資料來源查詢不接受此處原本的 AND -> OR -> AND 三層巢狀條件。
+    改成最上層 OR，每個分支各自使用 AND，語意相同：
+    1. 影片待處理
+    2. 影片處理中
+    3. 影片逐字稿完成但 AI 尚未完成
+    """
+    common = [
+        {"property": "內容類型", "select": {"equals": "影片"}},
+        {"property": "是否重複", "checkbox": {"equals": False}},
+    ]
+
     return query_one(
         {
             "page_size": 1,
             "filter": {
-                "and": [
-                    {"property": "內容類型", "select": {"equals": "影片"}},
-                    {"property": "是否重複", "checkbox": {"equals": False}},
+                "or": [
                     {
-                        "or": [
-                            {"property": "逐字稿狀態", "select": {"equals": "待處理"}},
-                            {"property": "逐字稿狀態", "select": {"equals": "處理中"}},
+                        "and": common
+                        + [
                             {
-                                "and": [
-                                    {"property": "逐字稿狀態", "select": {"equals": "完成"}},
-                                    {"property": "AI處理完成", "checkbox": {"equals": False}},
-                                ]
+                                "property": "逐字稿狀態",
+                                "select": {"equals": "待處理"},
+                            }
+                        ]
+                    },
+                    {
+                        "and": common
+                        + [
+                            {
+                                "property": "逐字稿狀態",
+                                "select": {"equals": "處理中"},
+                            }
+                        ]
+                    },
+                    {
+                        "and": common
+                        + [
+                            {
+                                "property": "逐字稿狀態",
+                                "select": {"equals": "完成"},
+                            },
+                            {
+                                "property": "AI處理完成",
+                                "checkbox": {"equals": False},
                             },
                         ]
                     },
