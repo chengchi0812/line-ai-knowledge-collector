@@ -48,7 +48,27 @@ export function detectContentTypeFromMessage(messageType: string, fileName?: str
   }
   if (url) {
     const p = detectPlatform(url);
-    if (["Instagram", "Facebook", "TikTok", "YouTube"].includes(p)) return "影片";
+    if (p === "TikTok" || p === "YouTube") return "影片";
+
+    // Facebook / Instagram URLs can be posts, photos, or videos. Only route
+    // URL shapes that explicitly identify short-form video to the transcriber;
+    // ordinary posts stay in the web-recovery pipeline.
+    try {
+      const parsed = new URL(url);
+      const path = parsed.pathname.toLowerCase();
+      if (p === "Facebook") {
+        if (/\/(?:reel|reels|watch)(?:\/|$)/.test(path) || /\/share\/r(?:\/|$)/.test(path)) {
+          return "影片";
+        }
+        return "貼文";
+      }
+      if (p === "Instagram") {
+        if (/\/(?:reel|reels)(?:\/|$)/.test(path)) return "影片";
+        return "貼文";
+      }
+    } catch {
+      // detectPlatform already validated the URL; keep a safe fallback here.
+    }
     return "文章";
   }
   return "貼文";
