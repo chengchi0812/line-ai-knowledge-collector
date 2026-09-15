@@ -7,7 +7,7 @@ import html
 import shutil
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import requests
 from dotenv import load_dotenv
@@ -26,6 +26,11 @@ NOTION_VERSION = "2026-03-11"
 AI_BASE_URL = (os.getenv("AI_BASE_URL") or "").rstrip("/")
 AI_API_KEY = os.getenv("AI_API_KEY")
 AI_MODEL = os.getenv("AI_MODEL") or "GPT-OSS-120b"
+
+VIDEO_MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES") or "3")
+VIDEO_RETRY_COOLDOWN_HOURS = int(
+    os.getenv("VIDEO_RETRY_COOLDOWN_HOURS") or "6"
+)
 
 if not NOTION_API_KEY:
     raise RuntimeError("找不到 NOTION_API_KEY")
@@ -91,6 +96,25 @@ def get_select_property(prop):
     return value.get("name") if value else None
 
 
+def get_number_property(prop):
+    value = prop.get("number")
+    return value if isinstance(value, (int, float)) else None
+
+
+def get_date_start(prop):
+    value = prop.get("date") or {}
+    return value.get("start")
+
+
+def parse_iso(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 def update_page_properties(page_id, properties):
     return notion_request(
         "PATCH",
@@ -119,6 +143,21 @@ def query_one(filters, sorts=None):
     return results[0] if results else None
 
 
+def query_many(filters, sorts=None, page_size=100):
+    body = {
+        "page_size": page_size,
+        "filter": {"and": filters},
+    }
+    if sorts:
+        body["sorts"] = sorts
+    data = notion_request(
+        "POST",
+        f"https://api.notion.com/v1/data_sources/{NOTION_DATA_SOURCE_ID}/query",
+        body,
+    )
+    return data.get("results", [])
+
+
 def get_ai_pending_job():
     return query_one(
         [
@@ -132,15 +171,44 @@ def get_ai_pending_job():
 
 
 def get_transcription_job():
-    return query_one(
+    candidates = query_many(
         [
-            {"property": "逐字稿狀態", "select": {"equals": "待處理"}},
+            {
+                "or": [
+                    {"property": "逐字稿狀態", "select": {"equals": "待處理"}},
+                    {"property": "逐字稿狀態", "select": {"equals": "失敗"}},
+                    {"property": "逐字稿狀態", "select": {"equals": "無法下載"}},
+                ]
+            },
             {"property": "內容類型", "select": {"equals": "影片"}},
             {"property": "是否重複", "checkbox": {"equals": False}},
             {"property": "原始連結", "url": {"is_not_empty": True}},
         ],
         [{"property": "收藏日期", "direction": "ascending"}],
     )
+
+    now = datetime.now(timezone.utc)
+    for page in candidates:
+        props = page.get("properties", {})
+        status = get_select_property(props.get("逐字稿狀態", {}))
+        retries = int(get_number_property(props.get("AI重試次數", {})) or 0)
+
+        if status == "待處理":
+            return page
+        if retries >= VIDEO_MAX_RETRIES:
+            continue
+
+        last = parse_iso(get_date_start(props.get("最後重試時間", {})))
+        if last is None:
+            return page
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if now - last.astimezone(timezone.utc) >= timedelta(
+            hours=VIDEO_RETRY_COOLDOWN_HOURS
+        ):
+            return page
+
+    return None
 
 
 def get_next_job():
@@ -1273,6 +1341,7 @@ def process_transcription(page):
             "AI處理完成": {
                 "checkbox": False
             },
+            "AI最後錯誤": rich_text_prop(""),
         }
 
         if duration is not None:
@@ -1363,6 +1432,15 @@ def process_transcription(page):
                 else "失敗"
             )
 
+            refreshed_props = refreshed.get("properties", {}) if refreshed else props
+            retries = int(
+                get_number_property(
+                    refreshed_props.get("AI重試次數", {})
+                )
+                or 0
+            )
+            now = datetime.now().astimezone().isoformat()
+
             update_page_properties(
                 page_id,
                 {
@@ -1370,7 +1448,11 @@ def process_transcription(page):
                         "select": {
                             "name": status
                         }
-                    }
+                    },
+                    "AI處理完成": {"checkbox": False},
+                    "AI重試次數": {"number": retries + 1},
+                    "最後重試時間": {"date": {"start": now}},
+                    "AI最後錯誤": rich_text_prop(str(exc)[:1800]),
                 },
             )
 
