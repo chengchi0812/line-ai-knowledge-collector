@@ -74,12 +74,36 @@ export async function findExistingHistoryIds(ids: string[]): Promise<Set<string>
   return found;
 }
 
-export async function createKnowledgePage(item: StoredItem): Promise<{ id: string; url: string }> {
+async function originalUrlAlreadyExists(originalUrl?: string): Promise<boolean> {
+  if (!originalUrl) return false;
+  try {
+    const res = await fetch(`https://api.notion.com/v1/data_sources/${dataSourceId()}/query`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        page_size: 1,
+        filter: { property: "原始連結", url: { equals: originalUrl } },
+      }),
+    });
+    if (!res.ok) {
+      console.error("Notion URL dedupe query failed", res.status, (await res.text()).slice(0, 500));
+      return false;
+    }
+    const data = await res.json();
+    return Array.isArray(data.results) && data.results.length > 0;
+  } catch (err) {
+    console.error("Notion URL dedupe query error", err);
+    return false;
+  }
+}
+
+export async function createKnowledgePage(item: StoredItem): Promise<{ id: string; url: string; isDuplicate: boolean }> {
+  const isDuplicate = await originalUrlAlreadyExists(item.originalUrl);
   const needsContentRecovery = item.captureStatus === "失敗" || item.captureStatus === "未擷取";
-  const videoNeedsTranscription = item.contentType === "影片" && Boolean(item.originalUrl);
-  const aiProcessed = !videoNeedsTranscription && !needsContentRecovery && (
+  const videoNeedsTranscription = item.contentType === "影片" && Boolean(item.originalUrl) && !isDuplicate;
+  const aiProcessed = isDuplicate || (!videoNeedsTranscription && !needsContentRecovery && (
     item.ai.category !== "暫存待判斷" || item.ai.summary !== "已先保存到知識庫，等待 AI 進一步整理。"
-  );
+  ));
 
   const props: Record<string, unknown> = {
     "標題": { title: [{ type: "text", text: { content: item.title.slice(0, 120) } }] },
@@ -90,13 +114,13 @@ export async function createKnowledgePage(item: StoredItem): Promise<{ id: strin
     "AI 摘要": richText(item.ai.summary),
     "為什麼值得留": richText(item.ai.why),
     "應用情境": { multi_select: item.ai.applications.map((name) => ({ name })) },
-    "狀態": { select: { name: item.ai.status } },
+    "狀態": { select: { name: isDuplicate ? "封存" : item.ai.status } },
     "重要度": { number: item.ai.importance },
     "收藏日期": { date: { start: item.collectedAt || new Date().toISOString() } },
     "原始備註": richText(item.originalNote),
     "內容快照": richText(item.snapshot),
-    "可能關聯": richText(item.ai.related),
-    "是否重複": { checkbox: false },
+    "可能關聯": richText(isDuplicate ? `與既有相同原始連結重複；保留本次轉傳紀錄。${item.ai.related ? ` ${item.ai.related}` : ""}` : item.ai.related),
+    "是否重複": { checkbox: isDuplicate },
     "AI處理完成": { checkbox: aiProcessed },
     "LINE訊息ID": richText(item.messageId),
     "擷取狀態": { select: { name: item.captureStatus } },
@@ -118,5 +142,5 @@ export async function createKnowledgePage(item: StoredItem): Promise<{ id: strin
   });
   if (!res.ok) throw new Error(`Notion create page failed: ${res.status} ${(await res.text()).slice(0, 1000)}`);
   const page = await res.json();
-  return { id: page.id, url: page.url };
+  return { id: page.id, url: page.url, isDuplicate };
 }
