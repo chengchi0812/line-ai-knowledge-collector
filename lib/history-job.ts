@@ -76,6 +76,7 @@ async function importOne(item: HistoricalKnowledgeItem, fileName: string) {
 
       await createKnowledgePage({
         title: ai.result.title || pageTitle || userText.slice(0, 80) || "LINE 歷史收藏",
+        originalTitle: pageTitle,
         sourcePlatform,
         contentType,
         originalUrl: item.url,
