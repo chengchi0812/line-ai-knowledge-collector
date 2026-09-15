@@ -21,6 +21,15 @@ function richText(content: string) {
   return { rich_text: [{ type: "text", text: { content: content.slice(0, 1900) } }] };
 }
 
+function richTextLong(content: string, limit = 7000) {
+  const text = (content || "").slice(0, limit);
+  const parts: Array<{ type: "text"; text: { content: string } }> = [];
+  for (let i = 0; i < text.length; i += 1800) {
+    parts.push({ type: "text", text: { content: text.slice(i, i + 1800) } });
+  }
+  return { rich_text: parts };
+}
+
 export async function uploadFileToNotion(fileName: string, contentType: string, buffer: Buffer): Promise<string> {
   const create = await fetch("https://api.notion.com/v1/file_uploads", {
     method: "POST",
@@ -119,6 +128,7 @@ export async function createKnowledgePage(item: StoredItem): Promise<{ id: strin
     "收藏日期": { date: { start: item.collectedAt || new Date().toISOString() } },
     "原始備註": richText(item.originalNote),
     "內容快照": richText(item.snapshot),
+    "平台原文": richTextLong(item.snapshot),
     "可能關聯": richText(isDuplicate ? `與既有相同原始連結重複；保留本次轉傳紀錄。${item.ai.related ? ` ${item.ai.related}` : ""}` : item.ai.related),
     "是否重複": { checkbox: isDuplicate },
     "AI處理完成": { checkbox: aiProcessed },
