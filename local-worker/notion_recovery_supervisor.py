@@ -146,15 +146,23 @@ def reset_video_for_retry(page):
 
 
 def choose_action():
+    # 1. 任何已進入主影片 Queue 的工作永遠優先，Recovery 不搶資源。
     active = active_video_job()
     if active:
         return "video_active", active
 
+    # 2. 非影片如果已經有足夠內容，只差 AI 整理，先完成它。
+    #    這類工作成本低，也避免被大量歷史失敗影片長期餓死。
+    mode, page = recovery.select_next_job()
+    if page and mode == "ready":
+        return "nonvideo_ready", page
+
+    # 3. 再把歷史失敗／無法下載影片逐筆重新排回主影片 Queue。
     retry_video = next_video_recovery()
     if retry_video:
         return "video_retry", retry_video
 
-    mode, page = recovery.select_next_job()
+    # 4. 最後才處理需要重新補抓內容的非影片歷史資料。
     if page:
         return f"nonvideo_{mode}", page
 
@@ -207,7 +215,7 @@ def run_once():
 
 def run_loop():
     print("Notion Recovery Supervisor 已啟動。")
-    print("優先順序：影片主 Queue → 失敗影片重試 → 非影片 AI/補抓。")
+    print("優先順序：影片主 Queue → 非影片已有內容只差 AI → 失敗影片重試 → 非影片補抓。")
 
     while True:
         try:
