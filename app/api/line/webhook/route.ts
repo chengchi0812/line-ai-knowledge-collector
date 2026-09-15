@@ -110,6 +110,7 @@ async function processEvent(event: LineEvent, origin: string) {
   });
   const stored = await createKnowledgePage({
     title: ai.result.title || pageTitle || fileName || "LINE 收藏",
+    originalTitle: pageTitle || fileName,
     sourcePlatform,
     contentType,
     originalUrl,
