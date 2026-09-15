@@ -76,7 +76,8 @@ export async function findExistingHistoryIds(ids: string[]): Promise<Set<string>
 
 export async function createKnowledgePage(item: StoredItem): Promise<{ id: string; url: string }> {
   const needsContentRecovery = item.captureStatus === "失敗" || item.captureStatus === "未擷取";
-  const aiProcessed = !needsContentRecovery && (
+  const videoNeedsTranscription = item.contentType === "影片" && Boolean(item.originalUrl);
+  const aiProcessed = !videoNeedsTranscription && !needsContentRecovery && (
     item.ai.category !== "暫存待判斷" || item.ai.summary !== "已先保存到知識庫，等待 AI 進一步整理。"
   );
 
@@ -100,6 +101,11 @@ export async function createKnowledgePage(item: StoredItem): Promise<{ id: strin
     "LINE訊息ID": richText(item.messageId),
     "擷取狀態": { select: { name: item.captureStatus } },
   };
+
+  if (videoNeedsTranscription) {
+    props["逐字稿狀態"] = { select: { name: "待處理" } };
+  }
+
   if (item.originalUrl) props["原始連結"] = { url: item.originalUrl };
   if (item.notionFileUploadId) {
     props["附件"] = { files: [{ type: "file_upload", file_upload: { id: item.notionFileUploadId } }] };
