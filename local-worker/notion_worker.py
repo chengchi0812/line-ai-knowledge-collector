@@ -483,6 +483,9 @@ def build_reference_context(page, metadata=None):
     snapshot = get_text_property(
         props.get("內容快照", {})
     )
+    platform_original = get_text_property(
+        props.get("平台原文", {})
+    )
 
     parts = []
 
@@ -514,13 +517,15 @@ def build_reference_context(page, metadata=None):
             f"使用者原始備註：{note[:2000]}"
         )
 
-    snapshot_clean = clean_reference_text(snapshot)
+    # 優先使用專門保存的「平台原文」；舊資料沒有時才退回內容快照。
+    source_text = platform_original or snapshot
+    source_clean = clean_reference_text(source_text)
     if (
-        snapshot_clean
-        and not noisy_snapshot(snapshot_clean)
+        source_clean
+        and not noisy_snapshot(source_clean)
     ):
         parts.append(
-            f"平台原始文字／Caption：{snapshot_clean[:5000]}"
+            f"平台原始文字／Caption：{source_clean[:5000]}"
         )
 
     return "\n\n".join(parts)[:8000]
@@ -932,6 +937,68 @@ def rich_text_prop(text):
     }
 
 
+def rich_text_prop_long(text, limit=7000):
+    value = (text or "")[:limit]
+    return {
+        "rich_text": [
+            {
+                "type": "text",
+                "text": {
+                    "content": value[i:i + 1800]
+                },
+            }
+            for i in range(0, len(value), 1800)
+        ]
+    }
+
+
+def ensure_platform_original(page):
+    """
+    舊資料可能沒有「平台原文」。
+    在 AI 覆寫內容快照前，把目前可用的來源文字保存一份。
+    """
+    props = page.get("properties", {})
+    existing = get_text_property(
+        props.get("平台原文", {})
+    )
+    if existing:
+        return existing
+
+    snapshot = get_text_property(
+        props.get("內容快照", {})
+    )
+    cleaned = clean_reference_text(snapshot)
+
+    if (
+        not cleaned
+        or noisy_snapshot(cleaned)
+    ):
+        return ""
+
+    update_page_properties(
+        page["id"],
+        {
+            "平台原文": rich_text_prop_long(
+                snapshot
+            )
+        },
+    )
+
+    # 同步更新本地 page 物件，讓本輪即可使用。
+    page.setdefault(
+        "properties",
+        {}
+    )["平台原文"] = rich_text_prop_long(
+        snapshot
+    )
+
+    print(
+        "已保存平台原文，避免 AI 摘要覆蓋原始 Caption。"
+    )
+
+    return snapshot
+
+
 def write_ai_result(
     page_id,
     result,
@@ -1039,6 +1106,8 @@ def process_ai_only(page):
         "再進行 WiRouter AI 整理，不重跑 Whisper。"
     )
 
+    ensure_platform_original(page)
+
     reference_context = build_reference_context(
         page,
         metadata=None,
@@ -1135,6 +1204,8 @@ def process_transcription(page):
         source_name = map_text_source(
             metadata.get("text_source")
         )
+
+        ensure_platform_original(page)
 
         reference_context = build_reference_context(
             page,
@@ -1338,6 +1409,8 @@ def reprocess_page(page_id_or_url):
     print(
         "重新校正既有逐字稿，不重跑 Whisper..."
     )
+
+    ensure_platform_original(page)
 
     reference_context = build_reference_context(
         page,
