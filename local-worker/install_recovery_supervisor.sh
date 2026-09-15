@@ -19,14 +19,17 @@ mkdir -p "$PROJECT_DIR" "$LOG_DIR" "$HOME/Library/LaunchAgents"
 
 curl -fsSL "$RAW_BASE/notion_recovery_worker.py" -o "$PROJECT_DIR/notion_recovery_worker.py"
 curl -fsSL "$RAW_BASE/notion_recovery_supervisor.py" -o "$PROJECT_DIR/notion_recovery_supervisor.py"
+curl -fsSL "$RAW_BASE/apply_title_policy.py" -o "$PROJECT_DIR/apply_title_policy.py"
 
 "$PIP" install -q pypdf
 
+cd "$PROJECT_DIR"
+"$PYTHON" apply_title_policy.py
+"$PYTHON" -m py_compile "$PROJECT_DIR/notion_worker.py"
 "$PYTHON" -m py_compile "$PROJECT_DIR/notion_recovery_worker.py"
 "$PYTHON" -m py_compile "$PROJECT_DIR/notion_recovery_supervisor.py"
 
 echo "=== Recovery Queue Peek ==="
-cd "$PROJECT_DIR"
 "$PYTHON" notion_recovery_supervisor.py --peek || true
 
 cat > "$PLIST" <<EOF
