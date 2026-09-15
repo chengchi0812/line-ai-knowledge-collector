@@ -48,7 +48,7 @@ function normalize(x: any, titleHint: string): AIResult {
   const statuses = ["待看", "深入研究", "可應用"];
   const importance = Math.max(1, Math.min(5, Number(x.importance) || 2)) as 1|2|3|4|5;
   return {
-    title: String(x.title || titleHint || fallback.title).slice(0, 120),
+    title: String(x.title || titleHint || fallback.title).replace(/\s+/g, " ").trim().slice(0, 120),
     summary: String(x.summary || fallback.summary).slice(0, 1800),
     why: String(x.why || fallback.why).slice(0, 1000),
     category: categories.includes(x.category) ? x.category : "暫存待判斷",
@@ -84,6 +84,7 @@ export async function analyzeWithAI(input: {
   const system = `你是個人知識庫整理助理。使用繁體中文（台灣用語），只輸出 JSON。\n
 使用者會把 LINE 裡收藏的網址、文字、圖片或檔案存入知識庫。你要幫忙降噪，不要只是重述。\n
 重要原則：凡是使用者主動轉傳到這個收藏群組的內容，都視為具有收藏意圖。不得因內容價值暫時無法判斷、資訊不完整或看似不重要而建議刪除；不確定時請標記為「待看」或「暫存待判斷」。\n
+標題規則：\n1. title 是「知識庫閱讀標題」，目的是讓使用者一眼知道內容在講什麼；原始平台標題會另外保存，不需要逐字照抄。\n2. 原始標題若已清楚具體，保留核心意思並精簡即可；若原始標題過長、只有 hashtag、聳動、模糊或只是收藏日期，才依正文／摘要重新命名。\n3. 優先使用「人物／品牌／公司 + 核心事件、觀點或方法」或「主題 + 具體結論／方法／爭議」結構。\n4. 中文標題以約 15-32 個中文字為主，資訊要具體、有辨識度；不要為了長度硬塞字。\n5. 避免空泛或重複句型，例如「影片分享」「內容整理」「重點摘要」「值得關注」「相關資訊」；也不要連續把不同內容都寫成「某某談……」。\n6. 人名、品牌、公司、數字與結論必須有原始標題、正文、Caption、檔案內容或使用者文字支持，不可自行補充。\n7. 若實際內容不足以判斷，保留清楚的原始標題；真的沒有可辨識內容時才用【待補內容】。\n
 固定主分類只能擇一：政策與政府計畫、AI／科技工具、產業案例與趨勢、簡報與視覺素材、工作方法／Prompt／範本、個人生活與興趣、暫存待判斷。\n
 標籤只能從：AI、政策、工具、產業、簡報、研究、生活。\n
 應用情境只能從：工作、政策研究、簡報、學習、生活、娛樂、待判斷。\n
@@ -91,7 +92,7 @@ status 只能是：待看、深入研究、可應用。\n
 importance 為 1-5。\n
 請輸出：{"title":"","summary":"","why":"","category":"","tags":[],"applications":[],"status":"","importance":3,"related":""}`;
 
-  const user = `來源平台：${input.sourcePlatform}\n內容類型：${input.contentType}\n原始文字：${input.userText || "（無）"}\n網址：${input.url || "（無）"}\n網頁標題：${input.pageTitle || "（無）"}\n檔名：${input.fileName || "（無）"}\n可取得內容：${input.snapshot.slice(0, 7000)}`;
+  const user = `來源平台：${input.sourcePlatform}\n內容類型：${input.contentType}\n原始文字：${input.userText || "（無）"}\n網址：${input.url || "（無）"}\n原始／平台標題：${input.pageTitle || "（無）"}\n檔名：${input.fileName || "（無）"}\n可取得內容：${input.snapshot.slice(0, 7000)}`;
 
   try {
     const res = await fetch(`${base}/chat/completions`, {
