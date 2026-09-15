@@ -27,6 +27,7 @@ export type AIResult = {
 
 export type StoredItem = {
   title: string;
+  originalTitle?: string;
   sourcePlatform: SourcePlatform;
   contentType: ContentType;
   originalUrl?: string;
