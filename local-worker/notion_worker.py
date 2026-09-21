@@ -733,6 +733,85 @@ def correct_transcript(
     return "\n".join(corrected_parts).strip()
 
 
+def clean_generated_title(value):
+    text = str(value or "").strip()
+    text = re.sub(r"^```(?:text)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.splitlines()[0].strip() if text else ""
+    text = re.sub(
+        r"^(?:標題|title)\s*[：:]\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = text.strip("「」『』《》\"' ")
+    text = re.sub(r"\s+", " ", text)
+    return text[:60].rstrip("，。！？；：")
+
+
+def generate_knowledge_title(
+    title_hint,
+    summary,
+    transcript,
+    reference_context,
+):
+    system = """你是個人知識庫標題編輯。請只輸出一行繁體中文標題，不要 JSON、引號或「標題：」前綴。
+
+規則：
+1. 依影片真正內容命名，必須點出核心主題、工具、觀點或用途。
+2. 以 14-32 個中文字為原則，方便在 Notion 清單辨識與搜尋。
+3. 不得只寫「TikTok 收藏」「影片收藏」「Make Your Day」等平台式或通用名稱。
+4. 不要照抄原始標題；若原始標題已清楚，仍應整理成更適合知識庫的描述。
+5. 不確定的人名、品牌或工具名不要自行創造。"""
+
+    material = (transcript or "")[:6000]
+    user = f"""原始標題：{title_hint or '（無）'}
+AI 摘要：{summary or '（無）'}
+可驗證參考文字：{(reference_context or '')[:2500] or '（無）'}
+內容節錄：
+{material or '（無）'}"""
+
+    response = ai_client.chat.completions.create(
+        model=AI_MODEL,
+        temperature=0.1,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+
+    generated = clean_generated_title(
+        response.choices[0].message.content
+    )
+    old_title = clean_generated_title(title_hint)
+
+    if (
+        generated
+        and generated.casefold()
+        != old_title.casefold()
+    ):
+        return generated
+
+    # 模型若仍照抄舊標題，從已完成的摘要取第一個完整重點，
+    # 避免看似有回寫、實際上標題沒有改變。
+    summary_fallback = clean_generated_title(
+        re.split(
+            r"[。！？\n]",
+            summary or "",
+            maxsplit=1,
+        )[0]
+    )
+
+    if (
+        summary_fallback
+        and summary_fallback.casefold()
+        != old_title.casefold()
+    ):
+        return summary_fallback[:42]
+
+    return generated or old_title or "影片重點整理"
+
+
 def normalize_ai_result(data, title_hint):
     category = (
         data.get("category")
@@ -983,10 +1062,21 @@ snapshot 請用 3-6 點精煉內容重點，以換行分隔。
             "WiRouter AI 回傳空內容"
         )
 
-    return normalize_ai_result(
+    result = normalize_ai_result(
         safe_json(content),
         title_hint,
     )
+
+    # 標題改用獨立、受限制的產生步驟，避免 JSON 回應空白
+    # 或直接沿用平台原始標題，造成 Notion 看似沒有回寫。
+    result["title"] = generate_knowledge_title(
+        title_hint,
+        result["summary"],
+        material,
+        reference_context,
+    )
+
+    return result
 
 
 def rich_text_prop(text):
@@ -1558,6 +1648,72 @@ def reprocess_page(page_id_or_url):
     )
 
 
+def retitle_page(page_id_or_url):
+    page_id = page_id_or_url.strip()
+
+    match = re.search(
+        r"([0-9a-fA-F]{32})",
+        page_id.replace("-", ""),
+    )
+    if match:
+        compact = match.group(1)
+        page_id = (
+            f"{compact[0:8]}-"
+            f"{compact[8:12]}-"
+            f"{compact[12:16]}-"
+            f"{compact[16:20]}-"
+            f"{compact[20:32]}"
+        )
+
+    page = fetch_page(page_id)
+    props = page.get("properties", {})
+    old_title = get_text_property(
+        props.get("標題", {})
+    )
+    summary = get_text_property(
+        props.get("AI 摘要", {})
+    )
+    transcript = read_transcript_from_page(
+        page["id"]
+    )
+    reference_context = build_reference_context(
+        page,
+        metadata=None,
+    )
+
+    if not summary and not transcript:
+        raise RuntimeError(
+            "指定頁面沒有 AI 摘要或逐字稿，無法安全重做標題。"
+        )
+
+    new_title = generate_knowledge_title(
+        old_title,
+        summary,
+        transcript,
+        reference_context,
+    )
+
+    update_page_properties(
+        page["id"],
+        {
+            "標題": {
+                "title": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": new_title[:120]
+                        },
+                    }
+                ]
+            }
+        },
+    )
+
+    print("✅ 標題已回寫")
+    print("原標題：", old_title)
+    print("新標題：", new_title)
+
+
 def peek():
     mode, page = get_next_job()
 
@@ -1672,7 +1828,8 @@ def print_usage():
         "python notion_worker.py --peek\n"
         "python notion_worker.py --once\n"
         "python notion_worker.py --loop\n"
-        "python notion_worker.py --reprocess <Notion Page ID 或 URL>"
+        "python notion_worker.py --reprocess <Notion Page ID 或 URL>\n"
+        "python notion_worker.py --retitle <Notion Page ID 或 URL>"
     )
 
 
@@ -1697,6 +1854,14 @@ if __name__ == "__main__":
             print_usage()
             sys.exit(1)
         reprocess_page(
+            sys.argv[2]
+        )
+
+    elif mode == "--retitle":
+        if len(sys.argv) < 3:
+            print_usage()
+            sys.exit(1)
+        retitle_page(
             sys.argv[2]
         )
 
