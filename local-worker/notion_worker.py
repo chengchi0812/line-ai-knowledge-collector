@@ -31,6 +31,7 @@ VIDEO_MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES") or "3")
 VIDEO_RETRY_COOLDOWN_HOURS = int(
     os.getenv("VIDEO_RETRY_COOLDOWN_HOURS") or "6"
 )
+TITLE_PIPELINE_VERSION = "v2"
 
 if not NOTION_API_KEY:
     raise RuntimeError("找不到 NOTION_API_KEY")
@@ -211,6 +212,47 @@ def get_transcription_job():
     return None
 
 
+def get_retitle_job():
+    candidates = query_many(
+        [
+            {"property": "AI處理完成", "checkbox": {"equals": True}},
+            {"property": "AI標題已更新", "checkbox": {"equals": False}},
+            {"property": "內容類型", "select": {"equals": "影片"}},
+            {"property": "是否重複", "checkbox": {"equals": False}},
+        ],
+        [{"property": "收藏日期", "direction": "descending"}],
+    )
+
+    for page in candidates:
+        props = page.get("properties", {})
+        title = get_text_property(
+            props.get("標題", {})
+        )
+        original_title = get_text_property(
+            props.get("原始標題", {})
+        )
+
+        if title_needs_regeneration(
+            title,
+            original_title,
+        ):
+            return page
+
+        # 已是清楚、可辨識的標題，僅補上版本標記，
+        # 避免未來循環重複檢查或不必要地改寫。
+        update_page_properties(
+            page["id"],
+            {
+                "AI標題已更新": {"checkbox": True},
+                "AI標題版本": rich_text_prop(
+                    TITLE_PIPELINE_VERSION
+                ),
+            },
+        )
+
+    return None
+
+
 def get_next_job():
     # 先處理「已有逐字稿、只差 AI」的項目，避免重跑 Whisper。
     job = get_ai_pending_job()
@@ -220,6 +262,11 @@ def get_next_job():
     job = get_transcription_job()
     if job:
         return "transcribe", job
+
+    # 新工作完成後，再利用閒置時間補寫舊資料標題。
+    job = get_retitle_job()
+    if job:
+        return "retitle", job
 
     return None, None
 
@@ -733,6 +780,44 @@ def correct_transcript(
     return "\n".join(corrected_parts).strip()
 
 
+def title_needs_regeneration(
+    title,
+    original_title="",
+):
+    current = clean_generated_title(title)
+    original = clean_generated_title(original_title)
+
+    if not current:
+        return True
+
+    if (
+        original
+        and current.casefold() == original.casefold()
+    ):
+        return True
+
+    generic_markers = [
+        "make your day",
+        "tiktok 收藏",
+        "tiktok 影片",
+        "tiktok 短影片",
+        "tiktok 推薦影片",
+        "影片收藏",
+        "推薦影片",
+        "影片宣傳",
+        "官方推廣",
+        "未取得標題",
+        "facebook 影片連結",
+        "youtube 影片連結",
+    ]
+    lowered = current.casefold()
+
+    return any(
+        marker.casefold() in lowered
+        for marker in generic_markers
+    )
+
+
 def clean_generated_title(value):
     text = str(value or "").strip()
     text = re.sub(r"^```(?:text)?\s*", "", text, flags=re.IGNORECASE)
@@ -1220,6 +1305,12 @@ def write_ai_result(
             "AI處理完成": {
                 "checkbox": True
             },
+            "AI標題已更新": {
+                "checkbox": True
+            },
+            "AI標題版本": rich_text_prop(
+                TITLE_PIPELINE_VERSION
+            ),
         },
     )
 
@@ -1648,24 +1739,7 @@ def reprocess_page(page_id_or_url):
     )
 
 
-def retitle_page(page_id_or_url):
-    page_id = page_id_or_url.strip()
-
-    match = re.search(
-        r"([0-9a-fA-F]{32})",
-        page_id.replace("-", ""),
-    )
-    if match:
-        compact = match.group(1)
-        page_id = (
-            f"{compact[0:8]}-"
-            f"{compact[8:12]}-"
-            f"{compact[12:16]}-"
-            f"{compact[16:20]}-"
-            f"{compact[20:32]}"
-        )
-
-    page = fetch_page(page_id)
+def process_retitle(page):
     props = page.get("properties", {})
     old_title = get_text_property(
         props.get("標題", {})
@@ -1682,9 +1756,19 @@ def retitle_page(page_id_or_url):
     )
 
     if not summary and not transcript:
-        raise RuntimeError(
-            "指定頁面沒有 AI 摘要或逐字稿，無法安全重做標題。"
+        update_page_properties(
+            page["id"],
+            {
+                "AI標題已更新": {"checkbox": True},
+                "AI標題版本": rich_text_prop(
+                    "v2-skipped-no-content"
+                ),
+            },
         )
+        print(
+            "略過標題補寫：沒有 AI 摘要或逐字稿。"
+        )
+        return
 
     new_title = generate_knowledge_title(
         old_title,
@@ -1705,13 +1789,39 @@ def retitle_page(page_id_or_url):
                         },
                     }
                 ]
-            }
+            },
+            "AI標題已更新": {"checkbox": True},
+            "AI標題版本": rich_text_prop(
+                TITLE_PIPELINE_VERSION
+            ),
         },
     )
 
-    print("✅ 標題已回寫")
+    print("✅ 標題已自動回寫")
     print("原標題：", old_title)
     print("新標題：", new_title)
+
+
+def retitle_page(page_id_or_url):
+    page_id = page_id_or_url.strip()
+
+    match = re.search(
+        r"([0-9a-fA-F]{32})",
+        page_id.replace("-", ""),
+    )
+    if match:
+        compact = match.group(1)
+        page_id = (
+            f"{compact[0:8]}-"
+            f"{compact[8:12]}-"
+            f"{compact[12:16]}-"
+            f"{compact[16:20]}-"
+            f"{compact[20:32]}"
+        )
+
+    process_retitle(
+        fetch_page(page_id)
+    )
 
 
 def peek():
@@ -1780,6 +1890,8 @@ def run_once():
 
     if mode == "ai_only":
         process_ai_only(page)
+    elif mode == "retitle":
+        process_retitle(page)
     else:
         process_transcription(page)
 
@@ -1796,6 +1908,10 @@ def run_loop():
             if page:
                 if mode == "ai_only":
                     process_ai_only(
+                        page
+                    )
+                elif mode == "retitle":
+                    process_retitle(
                         page
                     )
                 else:
